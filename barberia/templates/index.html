@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NOIR&nbsp;&amp;&nbsp;GOLD — Barbershop OS</title>
+<meta name="theme-color" content="#08070c">
+<meta name="description" content="Sistema operativo de barbería de alta gama: citas, sala de espera en vivo, POS y analítica.">
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="/static/css/style.css">
+
+<!-- CDNs (sin frameworks pesados de UI) -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+</head>
+<body>
+
+<div id="toast-stack"></div>
+
+<div class="app-shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <nav class="sidebar">
+    <div class="brand-mark">N</div>
+
+    <div class="nav-icon active" data-view="agenda" data-tip="Agendar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+    </div>
+    <div class="nav-icon" data-view="espera" data-tip="Sala de espera">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    </div>
+    <div class="nav-icon" data-view="pos" data-tip="Punto de venta">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/></svg>
+    </div>
+    <div class="nav-icon" data-view="dashboard" data-tip="Analítica">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
+    </div>
+    <div class="nav-icon" data-view="recomendador" data-tip="Recomendador IA">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+    </div>
+  </nav>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main-content">
+
+    <!-- ============ VISTA: AGENDAR CITA ============ -->
+    <section class="view-section active" id="view-agenda">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Reservaciones</div>
+          <h1>Agenda tu experiencia</h1>
+        </div>
+        <div class="status-pill"><span class="status-dot"></span> Sistema en vivo</div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="glass-panel pad-lg">
+          <h3 style="margin-bottom:18px;">Nueva cita</h3>
+
+          <div class="field">
+            <label>Nombre del cliente</label>
+            <input type="text" id="f-nombre" placeholder="Ej. Rodrigo Salas">
+          </div>
+          <div class="field">
+            <label>Teléfono (WhatsApp)</label>
+            <input type="tel" id="f-telefono" placeholder="+52 33 0000 0000">
+          </div>
+          <div class="field">
+            <label>Barbero</label>
+            <select id="f-barbero"></select>
+          </div>
+          <div class="field">
+            <label>Servicio</label>
+            <select id="f-servicio"></select>
+          </div>
+          <div class="field">
+            <label>Fecha y hora</label>
+            <input type="datetime-local" id="f-fecha">
+          </div>
+          <div class="field">
+            <label>Anticipo (opcional)</label>
+            <div class="flex gap-sm">
+              <button class="btn btn-sm" data-pago="mercado_pago" type="button">Mercado Pago</button>
+              <button class="btn btn-sm" data-pago="spei" type="button">SPEI</button>
+              <button class="btn btn-sm btn-ghost" data-pago="" type="button">Sin anticipo</button>
+            </div>
+          </div>
+
+          <button class="btn btn-gold btn-block mt-lg" id="btn-agendar" data-sfx="confirm">
+            Confirmar reservación
+          </button>
+        </div>
+
+        <div class="glass-panel pad-lg" id="qr-panel" style="display:none;">
+          <h3>Escanea para pagar tu anticipo</h3>
+          <p class="text-dim">Al confirmar el pago tu lugar queda reservado automáticamente.</p>
+          <div style="display:flex; justify-content:center; padding:20px;">
+            <img id="qr-image" style="width:220px;height:220px;border-radius:14px;background:#fff;padding:10px;" />
+          </div>
+          <p class="text-faint" id="qr-ref" style="text-align:center;"></p>
+        </div>
+
+        <div class="glass-panel pad-lg" id="viewer3d-panel">
+          <h3 style="margin-bottom:14px;">Visor 3D — La Barbería</h3>
+          <div id="viewer3d-container"></div>
+          <p class="text-faint" style="margin-top:10px;">Arrastra para rotar · Scroll para acercar</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VISTA: SALA DE ESPERA ============ -->
+    <section class="view-section" id="view-espera">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Tiempo real · WebSocket</div>
+          <h1>Sala de espera</h1>
+        </div>
+        <div class="status-pill"><span class="status-dot"></span> <span id="ws-status">Conectando…</span></div>
+      </div>
+
+      <div class="glass-panel" id="queue-list">
+        <div class="pad-lg">
+          <div class="skeleton sk-line" style="width:60%"></div>
+          <div class="skeleton sk-line" style="width:80%"></div>
+          <div class="skeleton sk-line" style="width:45%"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VISTA: POS ============ -->
+    <section class="view-section" id="view-pos">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Punto de venta</div>
+          <h1>Cobrar servicio</h1>
+        </div>
+      </div>
+
+      <div class="pos-layout">
+        <div class="glass-panel pad-lg">
+          <h3 style="margin-bottom:14px;">Servicios</h3>
+          <div id="pos-servicios"></div>
+          <h3 style="margin:22px 0 14px;">Productos (inventario)</h3>
+          <div id="pos-productos"></div>
+        </div>
+
+        <div class="glass-panel pad-lg">
+          <h3 style="margin-bottom:14px;">Ticket</h3>
+
+          <div class="field">
+            <label>Cliente</label>
+            <select id="pos-cliente"><option value="">Sin cliente / mostrador</option></select>
+          </div>
+          <div class="field">
+            <label>Barbero que atendió</label>
+            <select id="pos-barbero"></select>
+          </div>
+
+          <div id="cart-lines" style="min-height:60px;"></div>
+
+          <div class="total-row"><span>Total</span><span id="pos-total">$0.00</span></div>
+          <p class="text-faint" id="pos-comision" style="margin-top:4px;"></p>
+
+          <div class="field mt-lg">
+            <label>Método de pago</label>
+            <select id="pos-metodo">
+              <option value="efectivo">Efectivo</option>
+              <option value="tarjeta">Tarjeta</option>
+              <option value="mercado_pago">Mercado Pago</option>
+              <option value="spei">SPEI</option>
+            </select>
+          </div>
+
+          <button class="btn btn-gold btn-block" id="btn-cobrar" data-sfx="cash">Cobrar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VISTA: DASHBOARD ============ -->
+    <section class="view-section" id="view-dashboard">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Analítica</div>
+          <h1>Panel de control</h1>
+        </div>
+      </div>
+
+      <div class="grid grid-4">
+        <div class="glass-panel kpi"><div class="label">Ingresos hoy</div><div class="value" id="kpi-ingresos-hoy">—</div></div>
+        <div class="glass-panel kpi"><div class="label">Citas activas</div><div class="value" id="kpi-citas-activas">—</div></div>
+        <div class="glass-panel kpi"><div class="label">Servicio top</div><div class="value" id="kpi-servicio-top" style="font-size:20px;">—</div></div>
+        <div class="glass-panel kpi"><div class="label">Stock bajo</div><div class="value" id="kpi-stock-bajo">—</div></div>
+      </div>
+
+      <div class="grid grid-2 mt-lg">
+        <div class="glass-panel pad-lg">
+          <h3>Ingresos últimos 7 días</h3>
+          <div class="chart-wrap"><canvas id="chart-ingresos"></canvas></div>
+        </div>
+        <div class="glass-panel pad-lg">
+          <h3>Horas pico</h3>
+          <div class="chart-wrap"><canvas id="chart-horaspico"></canvas></div>
+        </div>
+        <div class="glass-panel pad-lg">
+          <h3>Servicios más vendidos</h3>
+          <div class="chart-wrap"><canvas id="chart-servicios"></canvas></div>
+        </div>
+        <div class="glass-panel pad-lg">
+          <h3>Rendimiento por barbero</h3>
+          <div class="chart-wrap"><canvas id="chart-barberos"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VISTA: RECOMENDADOR IA ============ -->
+    <section class="view-section" id="view-recomendador">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Inteligencia visual</div>
+          <h1>Encuentra tu corte ideal</h1>
+        </div>
+      </div>
+
+      <div class="glass-panel pad-lg">
+        <p>Selecciona la forma de tu rostro (o sube una foto de referencia) y te sugerimos los cortes que mejor te favorecen.</p>
+
+        <div class="field">
+          <label>Foto de referencia (opcional, solo se procesa en tu navegador)</label>
+          <input type="file" id="face-upload" accept="image/*">
+        </div>
+
+        <div class="grid grid-4 mt-lg" id="face-options"></div>
+
+        <div id="face-result" class="glass-panel pad-lg mt-lg" style="display:none;"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ BOTTOM NAV (mobile) ============ -->
+<nav class="bottom-nav">
+  <div class="nav-icon active" data-view="agenda">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18"/></svg>
+  </div>
+  <div class="nav-icon" data-view="espera">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+  </div>
+  <div class="nav-icon" data-view="pos">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/></svg>
+  </div>
+  <div class="nav-icon" data-view="dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
+  </div>
+  <div class="nav-icon" data-view="recomendador">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+  </div>
+</nav>
+
+<script src="/static/js/audio.js"></script>
+<script src="/static/js/realtime.js"></script>
+<script src="/static/js/viewer3d.js"></script>
+<script src="/static/js/faceshape.js"></script>
+<script src="/static/js/pos.js"></script>
+<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

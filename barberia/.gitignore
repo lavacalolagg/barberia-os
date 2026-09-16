@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+database/barberia.db
+.env
+.DS_Store
