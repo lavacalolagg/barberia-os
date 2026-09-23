@@ -23,6 +23,21 @@ La base de datos SQLite se crea automáticamente en `database/barberia.db`
 la primera vez que se ejecuta `app.py` (semillas de 3 barberos, 5 servicios
 y 4 productos de inventario ya incluidas).
 
+### Acceso de staff (POS / Dashboard / Inventario)
+
+El área de reservaciones es pública (cualquier cliente puede agendar), pero
+cobrar en el POS, ver la analítica, mover la sala de espera y administrar
+el inventario requiere iniciar sesión en `/login` con **usuario y
+contraseña reales** (no una sola clave compartida).
+
+La primera vez que arranca, el sistema crea automáticamente una cuenta
+administradora con las credenciales de las variables de entorno
+`ADMIN_USER` / `ADMIN_PASSWORD` (por defecto en desarrollo:
+usuario `admin`, contraseña `barberia123`). **Cambia esas variables en
+producción.** Desde el panel de Inventario, un usuario con rol `admin`
+puede crear más cuentas de staff (rol `staff`, sin acceso a gestión de
+usuarios) o de administrador.
+
 Abre `http://localhost:5000` en el navegador. Para probar la PWA en un
 celular real, sirve la app por HTTPS (ej. con `ngrok` o un dominio con
 certificado) — los service workers requieren contexto seguro.
@@ -66,11 +81,35 @@ barberia/
 | POST   | `/api/pos/venta`                | Registrar venta: stock, comisión, puntos |
 | GET    | `/api/analytics/resumen`        | Datos agregados para el dashboard |
 | GET/POST | `/webhook/whatsapp`           | Verificación + procesamiento de mensajes |
-| POST   | `/api/recordatorios/ejecutar`   | Dispara recordatorios de citas próximas |
+| POST   | `/api/recordatorios/ejecutar`   | Dispara recordatorios de citas próximas (requiere sesión staff) |
+| GET/POST | `/login` / `GET /logout`       | Inicio/cierre de sesión (usuario + contraseña) |
+| GET    | `/api/whoami`                   | El frontend consulta esto para saber si el visitante es staff/admin |
+| GET    | `/healthz`                      | Health check para monitoreo (Render, UptimeRobot) |
+| POST   | `/api/inventario`                | Alta de producto nuevo (requiere sesión staff) |
+| PUT    | `/api/inventario/<id>`           | Edición de atributos — nombre, descripción, precio, categoría, imagen. **Nunca toca stock.** |
+| POST   | `/api/inventario/<id>/entrada`   | Entrada (+): compra/recepción — captura cantidad, proveedor, no. factura, fecha |
+| POST   | `/api/inventario/<id>/salida`    | Salida (-): merma/daño/extravío/caducidad/muestra — motivo **obligatorio** |
+| POST   | `/api/inventario/<id>/ajuste`    | Ajuste auditado (=): corrige a una cantidad exacta conocida, con motivo |
+| GET    | `/api/inventario/movimientos`    | Kardex — bitácora de todos los movimientos (filtrable por `?producto_id=`) |
+| GET/POST | `/api/usuarios`                | Listar / crear cuentas de staff (solo rol `admin`) |
+| PATCH  | `/api/usuarios/<id>/estado`      | Activar/desactivar una cuenta (solo rol `admin`) |
+
+🔒 Requieren sesión de staff (401 si no hay login): `POST /api/pos/venta`,
+`GET /api/analytics/resumen`, `PATCH /api/citas/<id>/estado`,
+`POST /api/recordatorios/ejecutar`, todo `/api/inventario/*` que no sea
+el `GET /api/inventario` público, y todo `/api/usuarios/*`.
+🔒🔒 Requieren además rol `admin` (403 si eres staff normal):
+`GET/POST /api/usuarios`, `PATCH /api/usuarios/<id>/estado`.
+El resto de la API es pública porque la alimenta la página de
+reservaciones que usan los clientes.
 
 Evento WebSocket: `sala_espera_update` — se emite cada vez que cambia una cita.
 
 ## Notas de producción (siguiente iteración)
+- **Autenticación:** ya implementada como contraseña única de staff
+  (`ADMIN_PASSWORD`). El siguiente paso natural es una tabla `usuarios`
+  con cuentas individuales por barbero y roles (dueño vs barbero), para
+  saber quién cobró qué sin tener que seleccionarlo manualmente en el POS.
 - **Pagos reales:** sustituir `generar_qr_base64` y `/api/pagos/qr` por el SDK
   oficial de Mercado Pago (Checkout Pro / QR dinámico) y validación de webhooks
   de confirmación de pago antes de marcar la cita como `confirmada`.

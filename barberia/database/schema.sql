@@ -37,16 +37,49 @@ CREATE TABLE IF NOT EXISTS servicios (
     activo          INTEGER NOT NULL DEFAULT 1
 );
 
+-- ---------- USUARIOS (staff con login real) ----------
+CREATE TABLE IF NOT EXISTS usuarios (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario         TEXT UNIQUE NOT NULL,
+    password_hash   TEXT NOT NULL,
+    nombre          TEXT,
+    rol             TEXT NOT NULL DEFAULT 'staff',  -- 'admin' | 'staff'
+    activo          INTEGER NOT NULL DEFAULT 1,
+    creado_en       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ---------- INVENTARIO ----------
 CREATE TABLE IF NOT EXISTS inventario (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre          TEXT NOT NULL,               -- "Cera Mate", "Aceite Barba"
     sku             TEXT UNIQUE,
-    stock_actual    INTEGER NOT NULL DEFAULT 0,
-    stock_minimo    INTEGER NOT NULL DEFAULT 3,
+    descripcion     TEXT,
+    categoria       TEXT,                        -- "Styling", "Cuidado de barba", "Insumos", etc.
+    imagen_url      TEXT,
+    stock_actual    REAL NOT NULL DEFAULT 0,
+    stock_minimo    REAL NOT NULL DEFAULT 3,
     precio_venta    REAL NOT NULL,
     costo_unitario  REAL NOT NULL DEFAULT 0,
-    unidad_consumo_por_servicio REAL DEFAULT 0    -- cuánto se consume al aplicar un servicio (ej. 0.1 = 10% del frasco)
+    unidad_consumo_por_servicio REAL DEFAULT 0,   -- cuánto se consume al aplicar un servicio (ej. 0.1 = 10% del frasco)
+    activo          INTEGER NOT NULL DEFAULT 1,
+    creado_en       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------- MOVIMIENTOS DE INVENTARIO (bitácora auditada / kardex) ----------
+CREATE TABLE IF NOT EXISTS movimientos_inventario (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    producto_id     INTEGER NOT NULL REFERENCES inventario(id),
+    tipo            TEXT NOT NULL,               -- 'entrada' | 'salida' | 'ajuste' | 'consumo_servicio' | 'venta'
+    cantidad        REAL NOT NULL,               -- signo: + para entradas/ajustes-arriba, - para salidas/consumo
+    stock_resultante REAL NOT NULL,               -- foto del stock justo después de aplicar el movimiento
+    motivo          TEXT,                        -- obligatorio en salidas: Merma | Rompimiento | Uso interno | Muestra | Caducidad | Extravío | Otro
+    nota            TEXT,                         -- texto libre opcional
+    proveedor       TEXT,                         -- solo entradas
+    numero_factura  TEXT,                         -- solo entradas
+    fecha           TEXT NOT NULL,                -- fecha "de negocio" del movimiento (puede diferir de creado_en)
+    usuario_id      INTEGER REFERENCES usuarios(id),
+    usuario_nombre  TEXT,                         -- snapshot por si el usuario se borra después
+    creado_en       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ---------- CITAS / SALA DE ESPERA ----------
@@ -99,6 +132,8 @@ CREATE INDEX IF NOT EXISTS idx_citas_estado ON citas(estado);
 CREATE INDEX IF NOT EXISTS idx_citas_fecha ON citas(fecha_hora);
 CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(creado_en);
 CREATE INDEX IF NOT EXISTS idx_clientes_telefono ON clientes(telefono);
+CREATE INDEX IF NOT EXISTS idx_movimientos_producto ON movimientos_inventario(producto_id);
+CREATE INDEX IF NOT EXISTS idx_movimientos_fecha ON movimientos_inventario(fecha);
 
 -- ---------- SEED DATA MÍNIMA ----------
 INSERT OR IGNORE INTO barberos (id, nombre, especialidad, porcentaje_comision, color_agenda) VALUES
@@ -113,8 +148,8 @@ INSERT OR IGNORE INTO servicios (id, nombre, duracion_min, precio, puntos_otorga
  (4, 'Corte + Barba Completo', 60, 480, 25),
  (5, 'Diseño / Línea de Cejas', 15, 100, 5);
 
-INSERT OR IGNORE INTO inventario (id, nombre, sku, stock_actual, stock_minimo, precio_venta, costo_unitario, unidad_consumo_por_servicio) VALUES
- (1, 'Cera Mate Premium', 'CER-001', 12, 3, 280, 120, 0.08),
- (2, 'Aceite para Barba', 'ACE-002', 8, 3, 220, 90, 0.10),
- (3, 'Loción Post-Afeitado', 'LOC-003', 5, 2, 180, 70, 0.05),
- (4, 'Navajas Desechables (caja)', 'NAV-004', 20, 5, 0, 15, 1);
+INSERT OR IGNORE INTO inventario (id, nombre, sku, descripcion, categoria, stock_actual, stock_minimo, precio_venta, costo_unitario, unidad_consumo_por_servicio) VALUES
+ (1, 'Cera Mate Premium', 'CER-001', 'Cera de fijación fuerte, acabado mate.', 'Styling', 12, 3, 280, 120, 0.08),
+ (2, 'Aceite para Barba', 'ACE-002', 'Aceite hidratante con aroma a sándalo.', 'Cuidado de barba', 8, 3, 220, 90, 0.10),
+ (3, 'Loción Post-Afeitado', 'LOC-003', 'Loción calmante sin alcohol.', 'Cuidado facial', 5, 2, 180, 70, 0.05),
+ (4, 'Navajas Desechables (caja)', 'NAV-004', 'Caja con 10 navajas desechables.', 'Insumos', 20, 5, 0, 15, 1);

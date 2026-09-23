@@ -24,6 +24,10 @@ const Dashboard = (() => {
 
   async function cargar() {
     const res = await fetch("/api/analytics/resumen");
+    if (res.status === 401) {
+      window.location.href = "/login?next=/";
+      return;
+    }
     const data = await res.json();
 
     document.getElementById("kpi-ingresos-hoy").textContent = `$${(data.ingresos_hoy || 0).toFixed(2)}`;

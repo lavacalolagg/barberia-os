@@ -18,6 +18,7 @@ const App = (() => {
 
     if (view === "dashboard") Dashboard.cargar();
     if (view === "pos") POS && renderPosLazy();
+    if (view === "inventario") Inventory.cargar();
   }
 
   function renderPosLazy() { /* POS ya se autoinicializa en DOMContentLoaded */ }
@@ -122,10 +123,35 @@ const App = (() => {
     }
   }
 
+  // ---------------- INDICADOR DE SESIÓN DE STAFF ----------------
+  function initAuthLink() {
+    const links = [
+      document.getElementById("staff-auth-link"),
+      document.getElementById("staff-auth-link-mobile"),
+    ].filter(Boolean);
+    if (!links.length) return;
+    fetch("/api/whoami")
+      .then((r) => r.json())
+      .then((data) => {
+        links.forEach((link) => {
+          if (data.staff) {
+            link.href = "/logout";
+            link.title = "Cerrar sesión de staff";
+            link.classList.add("active");
+          } else {
+            link.href = "/login?next=/";
+            link.title = "Acceso staff (POS / Dashboard)";
+          }
+        });
+      })
+      .catch(() => {});
+  }
+
   function init() {
     initNav();
     initPagoButtons();
     cargarCatalogosAgenda();
+    initAuthLink();
     document.getElementById("btn-agendar")?.addEventListener("click", agendar);
     registerServiceWorker();
   }

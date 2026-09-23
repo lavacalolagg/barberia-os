@@ -119,6 +119,10 @@ const POS = (() => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (res.status === 401) {
+        window.location.href = "/login?next=/";
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al cobrar");
 

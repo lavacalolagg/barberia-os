@@ -17,7 +17,12 @@ from datetime import datetime, timedelta
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, request, jsonify, g, render_template, send_from_directory
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask import (
+    Flask, request, jsonify, g, render_template, send_from_directory,
+    session, redirect, url_for,
+)
 from flask_socketio import SocketIO, emit
 
 # QR opcional: si 'qrcode' no está instalado, degradamos con gracia.
@@ -34,6 +39,37 @@ SCHEMA_PATH = os.path.join(BASE_DIR, "database", "schema.sql")
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cyber-luxury-dev-key")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# ------------------------------------------------------------------
+# AUTENTICACIÓN DE PERSONAL (usuarios reales, no contraseña compartida)
+# ------------------------------------------------------------------
+# Motivos de salida de inventario permitidos (lista cerrada + nota libre).
+MOTIVOS_SALIDA_VALIDOS = {"Merma", "Rompimiento", "Uso interno", "Muestra", "Caducidad", "Extravío", "Otro"}
+
+
+def login_required(f):
+    """Protege endpoints que solo el staff logueado debe poder usar.
+    Devuelve 401 JSON porque estos endpoints los consume JavaScript;
+    el frontend decide qué hacer con el 401 (mandar a /login)."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"error": "No autorizado. Inicia sesión como staff."}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def admin_required(f):
+    """Protege endpoints que solo un usuario con rol 'admin' debe poder usar
+    (ej. crear/desactivar cuentas de otros usuarios)."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"error": "No autorizado. Inicia sesión como staff."}), 401
+        if session.get("rol") != "admin":
+            return jsonify({"error": "Esta acción requiere rol de administrador."}), 403
+        return f(*args, **kwargs)
+    return wrapper
 
 # ------------------------------------------------------------------
 # DB HELPERS
@@ -54,11 +90,54 @@ def close_db(exception=None):
 
 
 def init_db():
+    """Se corre en cada arranque. Es seguro repetirla: el esquema usa
+    CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE, así que no duplica ni
+    rompe nada si la base de datos ya existía."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         conn.executescript(f.read())
     conn.commit()
+    conn.close()
+    ensure_schema_upgrades()
+    seed_admin_user()
+
+
+def ensure_schema_upgrades():
+    """Parches idempotentes para bases de datos creadas con una versión
+    anterior del esquema (ej. antes de agregar columnas nuevas a inventario).
+    Cada ALTER se ignora si la columna ya existe."""
+    conn = sqlite3.connect(DB_PATH)
+    for stmt in [
+        "ALTER TABLE inventario ADD COLUMN descripcion TEXT",
+        "ALTER TABLE inventario ADD COLUMN categoria TEXT",
+        "ALTER TABLE inventario ADD COLUMN imagen_url TEXT",
+        "ALTER TABLE inventario ADD COLUMN activo INTEGER NOT NULL DEFAULT 1",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # la columna ya existe
+    conn.commit()
+    conn.close()
+
+
+def seed_admin_user():
+    """Crea la primera cuenta de administrador si la tabla usuarios está
+    vacía, usando las credenciales de las variables de entorno ADMIN_USER
+    y ADMIN_PASSWORD (con valores por defecto para desarrollo local)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    existe = conn.execute("SELECT COUNT(*) AS n FROM usuarios").fetchone()["n"]
+    if existe == 0:
+        usuario = os.environ.get("ADMIN_USER", "admin")
+        password = os.environ.get("ADMIN_PASSWORD", "barberia123")
+        conn.execute(
+            "INSERT INTO usuarios (usuario, password_hash, nombre, rol) VALUES (?,?,?,?)",
+            (usuario, generate_password_hash(password), "Administrador", "admin"),
+        )
+        conn.commit()
+        app.logger.info(f"Usuario admin inicial creado: '{usuario}' (cambia la contraseña por defecto en producción).")
     conn.close()
 
 
@@ -76,6 +155,52 @@ def rows_to_list(rows):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        usuario = request.form.get("usuario", "").strip()
+        password = request.form.get("password", "")
+        db = get_db()
+        row = db.execute(
+            "SELECT * FROM usuarios WHERE usuario=? AND activo=1", (usuario,)
+        ).fetchone()
+        if row and check_password_hash(row["password_hash"], password):
+            session["user_id"] = row["id"]
+            session["usuario"] = row["usuario"]
+            session["nombre"] = row["nombre"]
+            session["rol"] = row["rol"]
+            next_url = request.args.get("next") or "/"
+            return redirect(next_url)
+        error = "Usuario o contraseña incorrectos."
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
+
+
+@app.route("/api/whoami")
+def whoami():
+    """El frontend usa esto para saber si debe mostrar controles de staff
+    (botones de la sala de espera, panel de inventario, gestión de usuarios)
+    sin exponer esa lógica solo en el cliente."""
+    return jsonify({
+        "staff": bool(session.get("user_id")),
+        "usuario": session.get("usuario"),
+        "nombre": session.get("nombre"),
+        "rol": session.get("rol"),
+    })
+
+
+@app.route("/healthz")
+def healthz():
+    """Endpoint simple de salud para monitoreo (Render, UptimeRobot, etc)."""
+    return jsonify({"status": "ok", "ts": datetime.now().isoformat()})
 
 
 @app.route("/manifest.json")
@@ -144,8 +269,259 @@ def listar_servicios():
 @app.route("/api/inventario", methods=["GET"])
 def listar_inventario():
     db = get_db()
-    rows = db.execute("SELECT * FROM inventario ORDER BY stock_actual ASC").fetchall()
+    rows = db.execute("SELECT * FROM inventario WHERE activo=1 ORDER BY nombre ASC").fetchall()
     return jsonify(rows_to_list(rows))
+
+
+# ------------------------------------------------------------------
+# API: INVENTARIO — PANEL ADMINISTRATIVO AUDITADO
+#
+# Toda modificación de stock físico queda registrada en
+# movimientos_inventario con quién, cuándo y por qué. Tres flujos:
+#   1) Entrada (+): compra/recepción de proveedor.
+#   2) Salida (-): merma, daño, extravío, caducidad, muestra — motivo obligatorio.
+#   3) Ajuste (=): corrección auditada de una cantidad incorrecta (con motivo).
+# La edición de atributos (nombre, descripción, precio, categoría, imagen)
+# es una operación separada que NUNCA toca stock_actual directamente.
+# ------------------------------------------------------------------
+def registrar_movimiento(db, producto_id, tipo, cantidad, stock_resultante,
+                          motivo=None, nota=None, proveedor=None, numero_factura=None, fecha=None):
+    db.execute(
+        """INSERT INTO movimientos_inventario
+           (producto_id, tipo, cantidad, stock_resultante, motivo, nota,
+            proveedor, numero_factura, fecha, usuario_id, usuario_nombre)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (producto_id, tipo, cantidad, stock_resultante, motivo, nota,
+         proveedor, numero_factura, fecha or datetime.now().strftime("%Y-%m-%d"),
+         session.get("user_id"), session.get("nombre") or session.get("usuario")),
+    )
+
+
+@app.route("/api/inventario", methods=["POST"])
+@login_required
+def crear_producto():
+    """Alta de un producto nuevo en el catálogo. El stock inicial (si se
+    manda) se registra también como un movimiento de tipo 'entrada' para
+    que el kardex arranque completo desde el día uno."""
+    data = request.get_json(force=True)
+    nombre = (data.get("nombre") or "").strip()
+    precio_venta = data.get("precio_venta")
+    if not nombre or precio_venta is None:
+        return jsonify({"error": "nombre y precio_venta son obligatorios"}), 400
+
+    db = get_db()
+    stock_inicial = float(data.get("stock_actual", 0) or 0)
+    cur = db.execute(
+        """INSERT INTO inventario
+           (nombre, sku, descripcion, categoria, imagen_url, stock_actual, stock_minimo,
+            precio_venta, costo_unitario, unidad_consumo_por_servicio)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (nombre, data.get("sku"), data.get("descripcion"), data.get("categoria"), data.get("imagen_url"),
+         stock_inicial, data.get("stock_minimo", 3), precio_venta,
+         data.get("costo_unitario", 0), data.get("unidad_consumo_por_servicio", 0)),
+    )
+    producto_id = cur.lastrowid
+    if stock_inicial > 0:
+        registrar_movimiento(db, producto_id, "entrada", stock_inicial, stock_inicial,
+                              nota="Alta inicial de producto", proveedor=data.get("proveedor"))
+    db.commit()
+    producto = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    return jsonify(row_to_dict(producto)), 201
+
+
+@app.route("/api/inventario/<int:producto_id>", methods=["PUT"])
+@login_required
+def editar_producto(producto_id):
+    """Edición / Modificación: SOLO atributos (nombre, descripción, precio,
+    categoría, imagen, costo, mínimo, consumo por servicio). No toca
+    stock_actual — para eso están /entrada, /salida y /ajuste, que sí
+    quedan auditados en el kardex."""
+    db = get_db()
+    producto = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    if not producto:
+        return jsonify({"error": "Producto no encontrado"}), 404
+
+    data = request.get_json(force=True)
+    campos_editables = {
+        "nombre": data.get("nombre", producto["nombre"]),
+        "sku": data.get("sku", producto["sku"]),
+        "descripcion": data.get("descripcion", producto["descripcion"]),
+        "categoria": data.get("categoria", producto["categoria"]),
+        "imagen_url": data.get("imagen_url", producto["imagen_url"]),
+        "precio_venta": data.get("precio_venta", producto["precio_venta"]),
+        "costo_unitario": data.get("costo_unitario", producto["costo_unitario"]),
+        "stock_minimo": data.get("stock_minimo", producto["stock_minimo"]),
+        "unidad_consumo_por_servicio": data.get("unidad_consumo_por_servicio", producto["unidad_consumo_por_servicio"]),
+        "activo": data.get("activo", producto["activo"]),
+    }
+    db.execute(
+        """UPDATE inventario SET nombre=?, sku=?, descripcion=?, categoria=?, imagen_url=?,
+           precio_venta=?, costo_unitario=?, stock_minimo=?, unidad_consumo_por_servicio=?, activo=?
+           WHERE id=?""",
+        (*campos_editables.values(), producto_id),
+    )
+    db.commit()
+    actualizado = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    return jsonify(row_to_dict(actualizado))
+
+
+@app.route("/api/inventario/<int:producto_id>/entrada", methods=["POST"])
+@login_required
+def entrada_inventario(producto_id):
+    """Entradas (+): incremento de stock por compra o recepción de
+    proveedor. Captura: cantidad, proveedor / no. de factura, fecha."""
+    data = request.get_json(force=True)
+    cantidad = data.get("cantidad")
+    if not cantidad or float(cantidad) <= 0:
+        return jsonify({"error": "cantidad debe ser mayor a 0"}), 400
+
+    db = get_db()
+    producto = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    if not producto:
+        return jsonify({"error": "Producto no encontrado"}), 404
+
+    nuevo_stock = producto["stock_actual"] + float(cantidad)
+    db.execute("UPDATE inventario SET stock_actual=? WHERE id=?", (nuevo_stock, producto_id))
+    registrar_movimiento(
+        db, producto_id, "entrada", float(cantidad), nuevo_stock,
+        proveedor=data.get("proveedor"), numero_factura=data.get("numero_factura"),
+        nota=data.get("nota"), fecha=data.get("fecha"),
+    )
+    db.commit()
+    actualizado = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    return jsonify(row_to_dict(actualizado)), 201
+
+
+@app.route("/api/inventario/<int:producto_id>/salida", methods=["POST"])
+@login_required
+def salida_inventario(producto_id):
+    """Bajas / Salidas justificadas (-): merma, producto dañado, extravío,
+    caducidad o muestra. El motivo es de llenado OBLIGATORIO (lista cerrada)
+    + nota de texto libre opcional."""
+    data = request.get_json(force=True)
+    cantidad = data.get("cantidad")
+    motivo = (data.get("motivo") or "").strip()
+
+    if not cantidad or float(cantidad) <= 0:
+        return jsonify({"error": "cantidad debe ser mayor a 0"}), 400
+    if motivo not in MOTIVOS_SALIDA_VALIDOS:
+        return jsonify({"error": f"motivo obligatorio, debe ser uno de: {', '.join(sorted(MOTIVOS_SALIDA_VALIDOS))}"}), 400
+
+    db = get_db()
+    producto = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    if not producto:
+        return jsonify({"error": "Producto no encontrado"}), 404
+    if producto["stock_actual"] < float(cantidad):
+        return jsonify({"error": f"Stock insuficiente (disponible: {producto['stock_actual']})"}), 409
+
+    nuevo_stock = producto["stock_actual"] - float(cantidad)
+    db.execute("UPDATE inventario SET stock_actual=? WHERE id=?", (nuevo_stock, producto_id))
+    registrar_movimiento(
+        db, producto_id, "salida", -float(cantidad), nuevo_stock,
+        motivo=motivo, nota=data.get("nota"), fecha=data.get("fecha"),
+    )
+    db.commit()
+    actualizado = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    return jsonify(row_to_dict(actualizado)), 201
+
+
+@app.route("/api/inventario/<int:producto_id>/ajuste", methods=["POST"])
+@login_required
+def ajustar_inventario(producto_id):
+    """Ajuste de Inventario auditado: corrige el stock a una cantidad
+    exacta conocida (ej. tras un conteo físico), dejando registro del
+    delta aplicado y el motivo — en vez de editar la cifra a ciegas."""
+    data = request.get_json(force=True)
+    if "cantidad_nueva" not in data:
+        return jsonify({"error": "cantidad_nueva es obligatoria"}), 400
+    motivo = (data.get("motivo") or "").strip()
+    if not motivo:
+        return jsonify({"error": "motivo es obligatorio para todo ajuste"}), 400
+
+    db = get_db()
+    producto = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    if not producto:
+        return jsonify({"error": "Producto no encontrado"}), 404
+
+    cantidad_nueva = float(data["cantidad_nueva"])
+    delta = cantidad_nueva - producto["stock_actual"]
+    db.execute("UPDATE inventario SET stock_actual=? WHERE id=?", (cantidad_nueva, producto_id))
+    registrar_movimiento(
+        db, producto_id, "ajuste", delta, cantidad_nueva,
+        motivo=motivo, nota=data.get("nota"), fecha=data.get("fecha"),
+    )
+    db.commit()
+    actualizado = db.execute("SELECT * FROM inventario WHERE id=?", (producto_id,)).fetchone()
+    return jsonify(row_to_dict(actualizado)), 201
+
+
+@app.route("/api/inventario/movimientos", methods=["GET"])
+@login_required
+def listar_movimientos():
+    """Kardex global (o filtrado por producto con ?producto_id=). Es la
+    bitácora auditada: quién movió qué, cuándo, cuánto y por qué."""
+    db = get_db()
+    producto_id = request.args.get("producto_id")
+    base = """
+        SELECT m.*, i.nombre AS producto_nombre
+        FROM movimientos_inventario m
+        JOIN inventario i ON i.id = m.producto_id
+    """
+    if producto_id:
+        rows = db.execute(base + " WHERE m.producto_id=? ORDER BY m.creado_en DESC LIMIT 200", (producto_id,)).fetchall()
+    else:
+        rows = db.execute(base + " ORDER BY m.creado_en DESC LIMIT 200").fetchall()
+    return jsonify(rows_to_list(rows))
+
+
+# ------------------------------------------------------------------
+# API: USUARIOS (solo administradores)
+# ------------------------------------------------------------------
+@app.route("/api/usuarios", methods=["GET"])
+@admin_required
+def listar_usuarios():
+    db = get_db()
+    rows = db.execute("SELECT id, usuario, nombre, rol, activo, creado_en FROM usuarios ORDER BY creado_en").fetchall()
+    return jsonify(rows_to_list(rows))
+
+
+@app.route("/api/usuarios", methods=["POST"])
+@admin_required
+def crear_usuario():
+    data = request.get_json(force=True)
+    usuario = (data.get("usuario") or "").strip()
+    password = data.get("password") or ""
+    if not usuario or len(password) < 6:
+        return jsonify({"error": "usuario es obligatorio y password debe tener al menos 6 caracteres"}), 400
+    rol = data.get("rol") if data.get("rol") in ("admin", "staff") else "staff"
+
+    db = get_db()
+    try:
+        cur = db.execute(
+            "INSERT INTO usuarios (usuario, password_hash, nombre, rol) VALUES (?,?,?,?)",
+            (usuario, generate_password_hash(password), data.get("nombre"), rol),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Ese nombre de usuario ya existe"}), 409
+
+    nuevo = db.execute("SELECT id, usuario, nombre, rol, activo, creado_en FROM usuarios WHERE id=?", (cur.lastrowid,)).fetchone()
+    return jsonify(row_to_dict(nuevo)), 201
+
+
+@app.route("/api/usuarios/<int:usuario_id>/estado", methods=["PATCH"])
+@admin_required
+def cambiar_estado_usuario(usuario_id):
+    """Activa/desactiva una cuenta (mejor que borrarla: conserva el
+    historial de quién hizo qué en movimientos_inventario)."""
+    data = request.get_json(force=True)
+    activo = 1 if data.get("activo") else 0
+    if usuario_id == session.get("user_id") and not activo:
+        return jsonify({"error": "No puedes desactivar tu propia cuenta."}), 400
+    db = get_db()
+    db.execute("UPDATE usuarios SET activo=? WHERE id=?", (activo, usuario_id))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 # ------------------------------------------------------------------
@@ -239,6 +615,7 @@ def crear_cita():
 
 
 @app.route("/api/citas/<int:cita_id>/estado", methods=["PATCH"])
+@login_required
 def actualizar_estado_cita(cita_id):
     data = request.get_json(force=True)
     nuevo_estado = data.get("estado")
@@ -291,6 +668,7 @@ def generar_qr_pago():
 # API: PUNTO DE VENTA (POS)
 # ------------------------------------------------------------------
 @app.route("/api/pos/venta", methods=["POST"])
+@login_required
 def registrar_venta():
     """
     Body esperado:
@@ -365,9 +743,31 @@ def registrar_venta():
         )
         # Descuento automático de inventario:
         # - venta directa de producto: descuenta la cantidad vendida
-        # - servicio: descuenta el consumo proporcional configurado (insumos usados)
         if it["tipo"] == "producto":
-            db.execute("UPDATE inventario SET stock_actual = stock_actual - ? WHERE id=?", (it["cantidad"], it["referencia_id"]))
+            nuevo_stock_prod = None
+            fila_prod = db.execute("SELECT stock_actual FROM inventario WHERE id=?", (it["referencia_id"],)).fetchone()
+            if fila_prod:
+                nuevo_stock_prod = fila_prod["stock_actual"] - it["cantidad"]
+                db.execute("UPDATE inventario SET stock_actual = ? WHERE id=?", (nuevo_stock_prod, it["referencia_id"]))
+                registrar_movimiento(db, it["referencia_id"], "venta", -it["cantidad"], nuevo_stock_prod,
+                                      nota=f"Venta #{venta_id}")
+
+    # - servicio: descuenta el consumo proporcional de insumos configurado
+    #   en inventario.unidad_consumo_por_servicio (ej. cera, aceite, toallas).
+    #   Se aplica una sola vez por cada unidad de servicio vendida, sumando
+    #   todos los servicios del ticket, para no descontar de más si el
+    #   ticket trae varios servicios y varios productos a la vez.
+    total_servicios_vendidos = sum(i["cantidad"] for i in items_resueltos if i["tipo"] == "servicio")
+    if total_servicios_vendidos > 0:
+        insumos = db.execute(
+            "SELECT id, stock_actual, unidad_consumo_por_servicio FROM inventario WHERE unidad_consumo_por_servicio > 0"
+        ).fetchall()
+        for insumo in insumos:
+            consumo = insumo["unidad_consumo_por_servicio"] * total_servicios_vendidos
+            nuevo_stock = max(0, insumo["stock_actual"] - consumo)
+            db.execute("UPDATE inventario SET stock_actual=? WHERE id=?", (nuevo_stock, insumo["id"]))
+            registrar_movimiento(db, insumo["id"], "consumo_servicio", -(insumo["stock_actual"] - nuevo_stock), nuevo_stock,
+                                  nota=f"Consumo por {total_servicios_vendidos} servicio(s) en venta #{venta_id}")
 
     if data.get("cliente_id") and puntos_totales:
         db.execute("UPDATE clientes SET puntos_lealtad = puntos_lealtad + ? WHERE id=?", (puntos_totales, data["cliente_id"]))
@@ -391,6 +791,7 @@ def registrar_venta():
 # API: DASHBOARD / ANALÍTICA
 # ------------------------------------------------------------------
 @app.route("/api/analytics/resumen", methods=["GET"])
+@login_required
 def analytics_resumen():
     db = get_db()
     hoy = datetime.now().strftime("%Y-%m-%d")
@@ -524,6 +925,7 @@ def enviar_recordatorios_pendientes():
 
 
 @app.route("/api/recordatorios/ejecutar", methods=["POST"])
+@login_required
 def ejecutar_recordatorios():
     n = enviar_recordatorios_pendientes()
     return jsonify({"enviados": n})
@@ -548,8 +950,11 @@ def on_solicitud(_data=None):
 # ------------------------------------------------------------------
 # BOOT
 # ------------------------------------------------------------------
-if not os.path.exists(DB_PATH):
-    init_db()
+# init_db() es idempotente (CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE),
+# así que se corre siempre: crea la base de datos si no existe, o la
+# actualiza con columnas/tablas nuevas (usuarios, movimientos_inventario)
+# si ya existía de una versión anterior del esquema.
+init_db()
 
 if __name__ == "__main__":
     # Modo desarrollo local: python app.py
