@@ -2,7 +2,7 @@
    SERVICE WORKER — Caché offline (app-shell) + PWA instalable
    Estrategia: cache-first para estáticos, network-first para /api/*
    ============================================================ */
-const CACHE_NAME = "noirgold-cache-v1";
+const CACHE_NAME = "noirgold-cache-v2";
 const APP_SHELL = [
   "/",
   "/manifest.json",
@@ -39,6 +39,22 @@ self.addEventListener("fetch", (event) => {
   // Nunca cachear WebSocket / socket.io ni el webhook
   if (url.pathname.startsWith("/socket.io") || url.pathname.startsWith("/webhook")) return;
 
+  // Navegación (la página HTML en sí): network-first, para que un
+  // despliegue nuevo se vea de inmediato en vez de quedarse pegado en
+  // una versión vieja cacheada. Si no hay internet, cae al caché.
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request)
+        .then((res) => {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return res;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
   // API: network-first, cae a caché si no hay conexión (lectura offline degradada)
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
@@ -53,12 +69,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Estáticos / shell: cache-first
+  // Estáticos (CSS/JS): cache-first para velocidad, pero revalida en
+  // segundo plano y actualiza el caché para la próxima visita.
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((res) => {
-      const clone = res.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-      return res;
-    }).catch(() => cached))
+    caches.match(request).then((cached) => {
+      const fetchAndUpdate = fetch(request).then((res) => {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        return res;
+      }).catch(() => cached);
+      return cached || fetchAndUpdate;
+    })
   );
 });
