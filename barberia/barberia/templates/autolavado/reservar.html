@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reserva tu lavado — Brillo Norte</title>
+  <link rel="stylesheet" href="/static/autolavado/theme.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <main class="mx-auto min-h-screen w-full max-w-[430px] bg-[var(--color-bg)] px-5 pb-10">
+    <header class="flex items-center justify-between pt-6">
+      <a href="/autolavado" class="flex items-center gap-3">
+        <span class="grid h-10 w-10 place-items-center rounded-[14px] bg-[var(--color-primary)] text-xl">✦</span>
+        <strong class="text-[14px] font-black tracking-[-0.045em]">BRILLO NORTE</strong>
+      </a>
+      <a href="/autolavado" aria-label="Cerrar reserva" class="grid h-11 w-11 place-items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-xl">×</a>
+    </header>
+
+    <section class="pt-9">
+      <div class="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[9px] font-extrabold uppercase tracking-wider text-[var(--color-muted)]">
+        <span class="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]"></span> Fácil, rápido, sin llamadas
+      </div>
+      <h1 class="text-[39px] font-black leading-[0.97] tracking-[-0.07em]">Tu auto merece<br><span class="text-[var(--color-muted)]">un buen</span> baño.</h1>
+      <p class="mt-4 max-w-[320px] text-[13px] leading-5 text-[var(--color-muted)]">Déjanos tus datos y coordinamos contigo el mejor horario.</p>
+    </section>
+
+    <section class="mt-6 rounded-[var(--radius)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-card)]">
+      <div class="mb-5 flex items-center justify-between">
+        <div>
+          <p class="text-[10px] font-extrabold uppercase tracking-wider text-[var(--color-muted)]">Solicitar cita</p>
+          <h2 class="mt-1 text-[19px] font-black">Cuéntanos lo básico</h2>
+        </div>
+        <span class="grid h-10 w-10 place-items-center rounded-2xl bg-[var(--color-primary-soft)]">✦</span>
+      </div>
+
+      <div id="booking-ok" class="hidden text-center">
+        <p class="text-[40px]">✦</p>
+        <h3 class="mt-2 text-[19px] font-black">¡Solicitud recibida!</h3>
+        <p class="mt-2 text-[12px] leading-5 text-[var(--color-muted)]" id="ok-text"></p>
+        <a id="ok-wa" target="_blank" rel="noopener" class="mt-5 flex min-h-[52px] w-full items-center justify-between rounded-full bg-[var(--color-primary)] px-5 text-[13px] font-extrabold text-[var(--color-primary-contrast)]">Confirmar por WhatsApp <span class="text-xl">↗</span></a>
+        <a href="/autolavado" class="mt-3 block text-[11px] font-bold text-[var(--color-muted)]">Volver al inicio</a>
+      </div>
+      <p id="booking-error" class="mb-3 hidden rounded-2xl bg-red-50 p-3 text-[11px] font-bold text-red-700"></p>
+
+      <form id="booking-form">
+        <label class="mb-4 block">
+          <span class="mb-2 block text-[11px] font-extrabold">Tu nombre</span>
+          <input required id="customer-name" type="text" placeholder="Ej. Andrea López" class="min-h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-4 text-[13px] outline-none">
+        </label>
+
+        <label class="mb-4 block">
+          <span class="mb-2 block text-[11px] font-extrabold">Teléfono de contacto</span>
+          <input required id="customer-phone" type="tel" placeholder="33 1234 5678" class="min-h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-4 text-[13px] outline-none">
+        </label>
+
+        <label class="mb-4 block">
+          <span class="mb-2 block text-[11px] font-extrabold">Tipo de vehículo</span>
+          <select required id="vehicle-type" class="min-h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-4 text-[13px]">
+            <option value="">Selecciona tu vehículo</option>
+            <option>Auto compacto</option>
+            <option>Sedán</option>
+            <option>SUV / camioneta</option>
+            <option>Pickup</option>
+          </select>
+        </label>
+
+        <label class="mb-4 block">
+          <span class="mb-2 block text-[11px] font-extrabold">Servicio que te interesa</span>
+          <select required id="service-type" class="min-h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-4 text-[13px]">
+            <option value="">Elige un servicio</option>
+            {% for s in servicios %}<option value="{{ s.id }}">{{ s.nombre }} · desde ${{ s.precio|int }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <div class="mb-5 grid grid-cols-2 gap-3">
+          <label class="block">
+            <span class="mb-2 block text-[11px] font-extrabold">Fecha preferida</span>
+            <input required id="appointment-date" type="date" class="h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[11px]">
+          </label>
+          <label class="block">
+            <span class="mb-2 block text-[11px] font-extrabold">Hora preferida</span>
+            <select required id="appointment-time" class="h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[12px]">
+              <option value="">Selecciona</option>
+              <option value="09:00">9:00 a. m.</option>
+              <option value="11:00">11:00 a. m.</option>
+              <option value="13:00">1:00 p. m.</option>
+              <option value="15:00">3:00 p. m.</option>
+              <option value="17:00">5:00 p. m.</option>
+            </select>
+          </label>
+        </div>
+
+        <button type="submit" class="flex min-h-[52px] w-full items-center justify-between rounded-full bg-[var(--color-primary)] px-5 text-[13px] font-extrabold text-[var(--color-primary-contrast)]">
+          <span id="btn-label">Solicitar cita</span> <span class="text-xl">↗</span>
+        </button>
+        <p class="mt-3 text-center text-[10px] leading-4 text-[var(--color-muted)]">Tu solicitud se guarda en nuestra agenda y después puedes confirmarla por WhatsApp.</p>
+      </form>
+    </section>
+
+    <div class="mt-4 flex gap-3 rounded-[20px] border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-4">
+      <span>◷</span>
+      <p class="text-[10px] leading-4 text-[var(--color-muted)]"><b class="text-[var(--color-text)]">La cita queda pendiente de confirmación.</b><br>Te responderemos para confirmar disponibilidad. Usamos tus datos solo para contactarte sobre tu cita.</p>
+    </div>
+
+    <a href="tel:+523332587813" class="mt-5 flex min-h-12 items-center justify-center gap-2 text-[11px] font-bold text-[var(--color-muted)]">
+      ¿Prefieres llamar? <span class="text-[var(--color-text)]">+52 33 3258 7813</span>
+    </a>
+  </main>
+
+  <script>
+    const form = document.getElementById('booking-form');
+    const WA = '523332587813';
+    document.getElementById('appointment-date').min = new Date().toISOString().slice(0, 10);
+
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      const err = document.getElementById('booking-error');
+      const btn = form.querySelector('button[type=submit]');
+      const label = document.getElementById('btn-label');
+      err.classList.add('hidden');
+      btn.disabled = true; label.textContent = 'Enviando…';
+
+      const sel = document.getElementById('service-type');
+      const payload = {
+        nombre: document.getElementById('customer-name').value.trim(),
+        telefono: document.getElementById('customer-phone').value.trim(),
+        vehiculo: document.getElementById('vehicle-type').value,
+        servicio_id: Number(sel.value),
+        fecha: document.getElementById('appointment-date').value,
+        hora: document.getElementById('appointment-time').value,
+      };
+      try {
+        const res = await fetch('/api/autolavado/reservar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo enviar la solicitud');
+
+        const servicioTxt = sel.options[sel.selectedIndex].text;
+        const horaTxt = document.getElementById('appointment-time').selectedOptions[0].text;
+        const msg = `Hola, acabo de solicitar la cita #${data.id} en Brillo Norte.\n\n` +
+          `Nombre: ${payload.nombre}\nVehículo: ${payload.vehiculo}\nServicio: ${servicioTxt}\n` +
+          `Fecha: ${payload.fecha} ${horaTxt}\n\nQuedo pendiente de confirmación.`;
+        document.getElementById('ok-text').textContent =
+          `Tu folio es #${data.id}. Quedó pendiente de confirmación; te responderemos pronto.`;
+        document.getElementById('ok-wa').href = `https://wa.me/${WA}?text=${encodeURIComponent(msg)}`;
+        form.classList.add('hidden');
+        document.getElementById('booking-ok').classList.remove('hidden');
+      } catch (e) {
+        err.textContent = e.message;
+        err.classList.remove('hidden');
+        btn.disabled = false; label.textContent = 'Solicitar cita';
+      }
+    });
+  </script>
+</body>
+</html>
